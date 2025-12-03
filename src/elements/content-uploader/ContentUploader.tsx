@@ -32,6 +32,11 @@ import {
     isMultiputSupported,
 } from '../../utils/uploads';
 import {
+    findMatchingPersistedSession,
+    cleanupExpiredSessions,
+    removePersistedSession,
+} from '../../utils/uploadSessionPersistence';
+import {
     DEFAULT_ROOT,
     CLIENT_NAME_CONTENT_UPLOADER,
     CLIENT_VERSION,
@@ -206,6 +211,10 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
     componentDidMount() {
         this.rootElement = document.getElementById(this.id);
         this.appElement = this.rootElement;
+        
+        // Clean up expired persisted sessions
+        cleanupExpiredSessions();
+        
         const { files, isPrepopulateFilesEnabled } = this.props;
         // isPrepopulateFilesEnabled is a prop used to pre-populate files without clicking upload button.
         if (isPrepopulateFilesEnabled && files && files.length > 0) {
@@ -587,7 +596,7 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
         files: Array<UploadFileWithAPIOptions | File>,
         itemUpdateCallback: Function,
     ) => {
-        const { rootFolderId } = this.props;
+        const { rootFolderId, isResumableUploadsEnabled } = this.props;
 
         // Convert files from the file API to upload items
         const newItems = files.map(file => {
@@ -602,6 +611,60 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
             }
 
             const api = this.getUploadAPI(uploadFile, uploadAPIOptions);
+            
+            // Check if this file matches a persisted upload session
+            // Only check for chunked uploads (files larger than CHUNKED_UPLOAD_MIN_SIZE_BYTES)
+            const isChunkedUpload = size > CHUNKED_UPLOAD_MIN_SIZE_BYTES;
+            if (isResumableUploadsEnabled && isChunkedUpload && api && typeof api.resume === 'function') {
+                const folderId = uploadAPIOptions?.folderId || rootFolderId;
+                const persistedSession = findMatchingPersistedSession({
+                    name,
+                    size,
+                    lastModified: uploadFile.lastModified,
+                    folderId,
+                });
+
+                if (persistedSession && persistedSession.sessionId) {
+                    // Set the sessionId on the API so it can be resumed
+                    api.sessionId = persistedSession.sessionId;
+                    // Set initial progress based on persisted session
+                    const initialProgress = persistedSession.bytesUploaded > 0 
+                        ? Math.round((persistedSession.bytesUploaded / size) * 100)
+                        : 0;
+                    
+                    const uploadItem: UploadItem = {
+                        api,
+                        extension,
+                        file: uploadFile,
+                        name,
+                        progress: initialProgress,
+                        size,
+                        status: STATUS_ERROR, // Set to error state so user can click resume
+                        bytesUploadedOnLastResume: persistedSession.bytesUploaded,
+                    };
+
+                    if (uploadAPIOptions) {
+                        uploadItem.options = uploadAPIOptions;
+                    }
+
+                    // Update folderId and fileId from persisted session if needed
+                    if (persistedSession.folderId) {
+                        uploadItem.options = {
+                            ...uploadItem.options,
+                            folderId: persistedSession.folderId,
+                        };
+                    }
+                    if (persistedSession.fileId) {
+                        uploadItem.options = {
+                            ...uploadItem.options,
+                            fileId: persistedSession.fileId,
+                        };
+                    }
+
+                    return uploadItem;
+                }
+            }
+
             const uploadItem: UploadItem = {
                 api,
                 extension,
@@ -905,6 +968,11 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
         if (entries && entries.length === 1) {
             const [boxFile] = entries;
             item.boxFile = boxFile;
+        }
+
+        // Remove persisted session on successful upload
+        if (item.api && item.api.sessionId) {
+            removePersistedSession(item.api.sessionId);
         }
 
         const updatedItems = [...this.itemsRef.current];

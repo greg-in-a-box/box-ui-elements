@@ -18,6 +18,11 @@ import {
     HTTP_STATUS_CODE_FORBIDDEN,
     MS_IN_S,
 } from '../../constants';
+import {
+    persistUploadSession,
+    updatePersistedSessionProgress,
+    removePersistedSession,
+} from '../../utils/uploadSessionPersistence';
 import MultiputPart, {
     PART_STATE_UPLOADED,
     PART_STATE_UPLOADING,
@@ -417,6 +422,22 @@ class MultiputUpload extends BaseMultiput {
             logEvent: session_endpoints.log_event,
         };
 
+        // Persist session information for resumability after page reload
+        if (this.isResumableUploadsEnabled && this.sessionId && this.file) {
+            const fileLastModified = this.file.lastModified || (this.initialFileLastModified ? new Date(this.initialFileLastModified).getTime() : undefined);
+            persistUploadSession({
+                sessionId: this.sessionId,
+                fileName: this.fileName,
+                fileSize: this.file.size,
+                fileLastModified,
+                folderId: this.folderId,
+                fileId: this.fileId || undefined,
+                bytesUploaded: this.totalUploadedBytes,
+                uploadHost: this.uploadHost,
+                apiHost: this.options.apiHost,
+            });
+        }
+
         this.populateParts();
         this.processNextParts();
     }
@@ -517,8 +538,90 @@ class MultiputUpload extends BaseMultiput {
             logEvent: session_endpoints.log_event,
         };
 
-        this.processNextParts();
+        // When resuming, check which parts are already uploaded on the server
+        // This handles the case where a part was in the middle of uploading when interrupted
+        this.checkAndMarkUploadedParts();
     }
+
+    /**
+     * Check which parts are already uploaded on the server and mark them accordingly.
+     * This is important when resuming an upload that was interrupted mid-part.
+     *
+     * @private
+     * @return {void}
+     */
+    checkAndMarkUploadedParts = async (): Promise<any> => {
+        if (this.isDestroyed()) {
+            return;
+        }
+
+        // Clear any existing parts before populating
+        this.parts = [];
+        this.numPartsNotStarted = 0;
+        this.numPartsDigestComputing = 0;
+        this.numPartsDigestReady = 0;
+        this.numPartsUploading = 0;
+        this.numPartsUploaded = 0;
+        this.firstUnuploadedPartIndex = 0;
+        this.totalUploadedBytes = 0;
+
+        // First populate all parts
+        this.populateParts();
+
+        // If this is a resume (we have a sessionId), check which parts are already uploaded
+        if (this.sessionId && this.sessionEndpoints.listParts) {
+            try {
+                // Get all uploaded parts from the server
+                const response = await this.xhr.get({
+                    url: this.sessionEndpoints.listParts,
+                });
+
+                const uploadedParts = response.data?.entries || [];
+                
+                // Create a map of uploaded parts by offset for quick lookup
+                const uploadedPartsMap = new Map();
+                uploadedParts.forEach((part: any) => {
+                    // Parts are identified by their offset
+                    uploadedPartsMap.set(part.offset, part);
+                });
+
+                // Mark parts that are already uploaded on the server
+                this.parts.forEach(part => {
+                    const uploadedPart = uploadedPartsMap.get(part.offset);
+                    if (uploadedPart) {
+                        // This part is already uploaded on the server
+                        part.state = PART_STATE_UPLOADED;
+                        part.data = { part: uploadedPart };
+                        part.uploadedBytes = part.partSize;
+                        
+                        // Update counters
+                        this.numPartsNotStarted -= 1;
+                        this.numPartsUploaded += 1;
+                        this.totalUploadedBytes += part.partSize;
+                    }
+                });
+
+                // Update first unuploaded part index
+                this.updateFirstUnuploadedPartIndex();
+
+                // Update progress callback with current progress
+                if (this.totalUploadedBytes > 0) {
+                    this.progressCallback({
+                        loaded: this.totalUploadedBytes,
+                        total: this.file.size,
+                    });
+                }
+            } catch (error) {
+                // If we can't list parts, continue anyway - parts will be re-uploaded if needed
+                // According to Box API docs, parts are immutable once uploaded, so re-uploading
+                // a complete part will result in an error, but incomplete/interrupted parts can be uploaded
+                this.consoleLog('Could not list uploaded parts, continuing with upload');
+            }
+        }
+
+        // Now process the remaining parts
+        this.processNextParts();
+    };
 
     /**
      * Handle error from getting upload session.
@@ -594,6 +697,10 @@ class MultiputUpload extends BaseMultiput {
     async sessionErrorHandler(error: ?Error, logEventType: string, logMessage?: string): Promise<any> {
         if (!this.isResumableUploadsEnabled) {
             this.destroy();
+            // Remove persisted session on non-resumable error
+            if (this.sessionId) {
+                removePersistedSession(this.sessionId);
+            }
         }
         const errorData = this.getErrorResponse(error);
         this.errorCallback(errorData);
@@ -703,6 +810,11 @@ class MultiputUpload extends BaseMultiput {
             loaded: this.totalUploadedBytes,
             total: this.file.size,
         });
+
+        // Update persisted session progress
+        if (this.isResumableUploadsEnabled && this.sessionId) {
+            updatePersistedSessionProgress(this.sessionId, this.totalUploadedBytes);
+        }
     };
 
     /**
@@ -999,6 +1111,11 @@ class MultiputUpload extends BaseMultiput {
             entries = [data];
         }
 
+        // Remove persisted session on successful completion
+        if (this.sessionId) {
+            removePersistedSession(this.sessionId);
+        }
+
         this.destroy();
 
         if (this.successCallback && entries) {
@@ -1234,6 +1351,12 @@ class MultiputUpload extends BaseMultiput {
         this.parts = [];
         clearTimeout(this.createSessionTimeout);
         clearTimeout(this.commitSessionTimeout);
+        
+        // Remove persisted session on cancel
+        if (this.sessionId) {
+            removePersistedSession(this.sessionId);
+        }
+        
         this.abortSession();
         this.destroy();
     }
