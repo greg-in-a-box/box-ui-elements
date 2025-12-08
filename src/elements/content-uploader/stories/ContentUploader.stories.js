@@ -17,5 +17,8 @@ export default {
         features: global.FEATURE_FLAGS,
         rootFolderId: global.FOLDER_ID,
         token: global.TOKEN,
+        chunked: true,
+        isResumableUploadsEnabled: true,        
+        isuploadfallbacklogicenabled: true,          
     },
 };

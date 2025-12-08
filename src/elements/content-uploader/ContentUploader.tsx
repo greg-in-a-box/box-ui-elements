@@ -625,6 +625,14 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
                 });
 
                 if (persistedSession && persistedSession.sessionId) {
+                    /* eslint-disable no-console */
+                    console.log('[ContentUploader] ✅ Found persisted session for file', {
+                        fileName: name,
+                        sessionId: persistedSession.sessionId,
+                        bytesUploaded: persistedSession.bytesUploaded,
+                    });
+                    /* eslint-enable no-console */
+
                     // Set the sessionId on the API so it can be resumed
                     api.sessionId = persistedSession.sessionId;
                     // Set initial progress based on persisted session
@@ -639,7 +647,7 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
                         name,
                         progress: initialProgress,
                         size,
-                        status: STATUS_ERROR, // Set to error state so user can click resume
+                        status: STATUS_PENDING, // Set to pending so it can be auto-resumed
                         bytesUploadedOnLastResume: persistedSession.bytesUploaded,
                     };
 
@@ -758,25 +766,50 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
         const { size } = file;
         const factory = this.createAPIFactory(uploadAPIOptions);
 
+        /* eslint-disable no-console */
+        console.log('[ContentUploader] getUploadAPI called', {
+            fileName: file.name,
+            fileSize: size,
+            fileSizeMB: (size / 1024 / 1024).toFixed(2),
+            chunked,
+            isResumableUploadsEnabled,
+            isUploadFallbackLogicEnabled,
+            chunkedUploadMinSize: CHUNKED_UPLOAD_MIN_SIZE_BYTES,
+            isMultiputSupported: isMultiputSupported(),
+        });
+        /* eslint-enable no-console */
+
         if (chunked && size > CHUNKED_UPLOAD_MIN_SIZE_BYTES) {
-            if (isMultiputSupported()) {
+            // if (isMultiputSupported()) {
+                /* eslint-disable no-console */
+                console.log('[ContentUploader] ✅ Using ChunkedUploadAPI (MultiputUpload)');
+                /* eslint-enable no-console */
                 const chunkedUploadAPI = factory.getChunkedUploadAPI();
                 if (isResumableUploadsEnabled) {
                     chunkedUploadAPI.isResumableUploadsEnabled = true;
+                    /* eslint-disable no-console */
+                    console.log('[ContentUploader] ✅ Resumable uploads enabled');
+                    /* eslint-enable no-console */
                 }
                 if (isUploadFallbackLogicEnabled) {
                     chunkedUploadAPI.isUploadFallbackLogicEnabled = true;
+                    /* eslint-disable no-console */
+                    console.log('[ContentUploader] ✅ Upload fallback logic enabled');
+                    /* eslint-enable no-console */
                 }
                 return chunkedUploadAPI;
-            }
+            // }
 
             /* eslint-disable no-console */
-            console.warn(
-                'Chunked uploading is enabled, but not supported by your browser. You may need to enable HTTPS.',
-            );
+            // console.warn(
+            //     'Chunked uploading is enabled, but not supported by your browser. You may need to enable HTTPS.',
+            // );
             /* eslint-enable no-console */
         }
 
+        /* eslint-disable no-console */
+        console.log('[ContentUploader] ⚠️ Using PlainUploadAPI (not chunked)');
+        /* eslint-enable no-console */
         const plainUploadAPI = factory.getPlainUploadAPI();
         if (isUploadFallbackLogicEnabled) {
             plainUploadAPI.isUploadFallbackLogicEnabled = true;
@@ -857,13 +890,51 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
      * @return {void}
      */
     uploadFile(item: UploadItem) {
-        const { overwrite, rootFolderId } = this.props;
+        const { overwrite, rootFolderId, isResumableUploadsEnabled } = this.props;
         const { api, file, options } = item;
 
         const numItemsUploading = this.itemsRef.current.filter(item_t => item_t.status === STATUS_IN_PROGRESS).length;
 
         if (numItemsUploading >= UPLOAD_CONCURRENCY) {
             return;
+        }
+
+        // Check if there's a persisted session for this file that we should resume instead of creating new
+        const isChunkedUpload = file.size > CHUNKED_UPLOAD_MIN_SIZE_BYTES;
+        if (isResumableUploadsEnabled && isChunkedUpload && api && typeof api.resume === 'function') {
+            // First check if API already has a sessionId (set when file was matched to persisted session)
+            let sessionIdToUse = api.sessionId;
+            
+            // If no sessionId on API, check localStorage for persisted session
+            if (!sessionIdToUse) {
+                const folderId = options && options.folderId ? options.folderId : rootFolderId;
+                const persistedSession = findMatchingPersistedSession({
+                    name: file.name,
+                    size: file.size,
+                    lastModified: file.lastModified,
+                    folderId,
+                });
+                
+                if (persistedSession && persistedSession.sessionId) {
+                    sessionIdToUse = persistedSession.sessionId;
+                    // Set it on the API for future use
+                    api.sessionId = sessionIdToUse;
+                }
+            }
+
+            if (sessionIdToUse) {
+                /* eslint-disable no-console */
+                console.log('[ContentUploader] 🔄 Found existing session, resuming instead of creating new session', {
+                    fileName: file.name,
+                    sessionId: sessionIdToUse,
+                    source: api.sessionId ? 'API instance' : 'localStorage',
+                });
+                /* eslint-enable no-console */
+
+                // Use resume instead of upload to avoid creating a new session
+                this.resumeFile(item);
+                return;
+            }
         }
 
         const uploadOptions: Object = {
@@ -901,6 +972,24 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
             return;
         }
 
+        const sessionId = api && api.sessionId ? api.sessionId : null;
+        
+        /* eslint-disable no-console */
+        console.log('[ContentUploader] 🔄 Resuming file upload', {
+            fileName: file.name,
+            fileSize: file.size,
+            sessionId,
+            hasSessionId: !!sessionId,
+        });
+        /* eslint-enable no-console */
+
+        if (!sessionId) {
+            /* eslint-disable no-console */
+            console.error('[ContentUploader] ❌ Cannot resume: no sessionId found');
+            /* eslint-enable no-console */
+            return;
+        }
+
         const resumeOptions: Object = {
             file,
             folderId: options && options.folderId ? options.folderId : rootFolderId,
@@ -908,7 +997,7 @@ class ContentUploader extends Component<ContentUploaderProps, State> {
             progressCallback: event => this.handleUploadProgress(item, event),
             successCallback: entries => this.handleUploadSuccess(item, entries),
             overwrite,
-            sessionId: api && api.sessionId ? api.sessionId : null,
+            sessionId,
             fileId: options && options.fileId ? options.fileId : null,
         };
 

@@ -165,6 +165,16 @@ class MultiputPart extends BaseMultiput {
             throw new Error('Part blob unavailable');
         }
 
+        /* eslint-disable no-console */
+        console.log('[MultiputPart] 📤 Uploading part', this.index, {
+            offset: this.offset,
+            rangeEnd: this.rangeEnd,
+            size: this.partSize,
+            sizeMB: (this.partSize / 1024 / 1024).toFixed(2),
+            sha1: `${this.sha1.substring(0, 20)}...`,
+        });
+        /* eslint-enable no-console */
+
         const clientEventInfo = {
             documentHidden: document.hidden,
             digest_retries: this.numDigestRetriesPerformed,
@@ -206,11 +216,20 @@ class MultiputPart extends BaseMultiput {
             return;
         }
 
+        const uploadTime = Date.now() - this.startTimestamp;
         this.state = PART_STATE_UPLOADED;
         this.consoleLog(`Upload completed: ${this.toJSON()}.`);
         this.data = data;
         this.blob = null;
-        this.timing.uploadTime = Date.now() - this.startTimestamp;
+        this.timing.uploadTime = uploadTime;
+
+        /* eslint-disable no-console */
+        console.log(`[MultiputPart] ✅ Part ${this.index} uploaded successfully`, {
+            uploadTimeMs: uploadTime,
+            uploadTimeSec: (uploadTime / 1000).toFixed(2),
+            speedMBps: ((this.partSize / 1024 / 1024) / (uploadTime / 1000)).toFixed(2),
+        });
+        /* eslint-enable no-console */
 
         this.onSuccess(this);
 

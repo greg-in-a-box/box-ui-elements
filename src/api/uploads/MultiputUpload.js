@@ -23,6 +23,7 @@ import {
     updatePersistedSessionProgress,
     removePersistedSession,
 } from '../../utils/uploadSessionPersistence';
+import { updateQueryParameters } from '../../utils/url';
 import MultiputPart, {
     PART_STATE_UPLOADED,
     PART_STATE_UPLOADING,
@@ -238,6 +239,17 @@ class MultiputUpload extends BaseMultiput {
         progressCallback?: Function,
         successCallback?: Function,
     }): void {
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📤 Starting upload', {
+            fileName: file.name,
+            fileSize: file.size,
+            fileSizeMB: (file.size / 1024 / 1024).toFixed(2),
+            folderId,
+            fileId: fileId || 'new file',
+            overwrite,
+        });
+        /* eslint-enable no-console */
+
         this.file = file;
         this.fileName = this.file.name;
         // These values are used as part of our (best effort) attempt to abort uploads if we detect
@@ -249,8 +261,15 @@ class MultiputUpload extends BaseMultiput {
         this.progressCallback = progressCallback || noop;
         this.successCallback = successCallback || noop;
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🔧 Creating SHA-1 worker for file digest computation');
+        console.log('[MultiputUpload] 🚀 Step 1: Making preflight request to get upload URL');
+        /* eslint-enable no-console */
         this.sha1Worker = createWorker();
         this.sha1Worker.addEventListener('message', this.onWorkerMessage);
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ SHA-1 worker created and message listener attached');
+        /* eslint-enable no-console */
 
         this.conflictCallback = conflictCallback;
         this.overwrite = overwrite;
@@ -291,12 +310,18 @@ class MultiputUpload extends BaseMultiput {
             return;
         }
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Preflight request successful');
+        /* eslint-enable no-console */
         const uploadUrl = this.getBaseUploadUrlFromPreflightResponse(preflightResponse);
         let createSessionUrl = `${uploadUrl}/files/upload_sessions`;
 
         // Parallelism is currently detrimental to multiput upload performance in Zones, so set it to 1.
         if (createSessionUrl.includes('fupload-ec2')) {
             this.config.parallelism = 1;
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ⚙️ Detected EC2 zone, setting parallelism to 1');
+            /* eslint-enable no-console */
         }
 
         // Set up post body
@@ -307,9 +332,23 @@ class MultiputUpload extends BaseMultiput {
 
         if (this.fileId) {
             createSessionUrl = createSessionUrl.replace('upload_sessions', `${this.fileId}/upload_sessions`);
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 📝 Uploading new version of existing file:', this.fileId);
+            /* eslint-enable no-console */
         } else {
             postData.folder_id = this.folderId;
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 📁 Uploading new file to folder:', this.folderId);
+            /* eslint-enable no-console */
         }
+
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🚀 Step 2: Creating upload session', {
+            url: createSessionUrl,
+            fileSize: this.file.size,
+            fileName: this.fileName,
+        });
+        /* eslint-enable no-console */
 
         try {
             const response = await this.xhr.post({
@@ -422,6 +461,18 @@ class MultiputUpload extends BaseMultiput {
             logEvent: session_endpoints.log_event,
         };
 
+        const numParts = Math.ceil(this.file.size / part_size);
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Upload session created', {
+            sessionId: this.sessionId,
+            partSize: part_size,
+            partSizeMB: (part_size / 1024 / 1024).toFixed(2),
+            totalParts: numParts,
+            fileSize: this.file.size,
+            fileSizeMB: (this.file.size / 1024 / 1024).toFixed(2),
+        });
+        /* eslint-enable no-console */
+
         // Persist session information for resumability after page reload
         if (this.isResumableUploadsEnabled && this.sessionId && this.file) {
             const fileLastModified = this.file.lastModified || (this.initialFileLastModified ? new Date(this.initialFileLastModified).getTime() : undefined);
@@ -436,9 +487,18 @@ class MultiputUpload extends BaseMultiput {
                 uploadHost: this.uploadHost,
                 apiHost: this.options.apiHost,
             });
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 💾 Session persisted to localStorage for resume capability');
+            /* eslint-enable no-console */
         }
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🚀 Step 3: Populating parts array');
+        /* eslint-enable no-console */
         this.populateParts();
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🚀 Step 4: Starting to process parts');
+        /* eslint-enable no-console */
         this.processNextParts();
     }
 
@@ -479,6 +539,17 @@ class MultiputUpload extends BaseMultiput {
         sessionId: string,
         successCallback?: Function,
     }): void {
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🔄 Resuming upload', {
+            fileName: file.name,
+            fileSize: file.size,
+            fileSizeMB: (file.size / 1024 / 1024).toFixed(2),
+            sessionId,
+            folderId,
+            fileId: fileId || 'new file',
+        });
+        /* eslint-enable no-console */
+
         this.setFileInfo({
             file,
             folderId,
@@ -492,10 +563,19 @@ class MultiputUpload extends BaseMultiput {
         this.sessionId = sessionId;
 
         if (!this.sha1Worker) {
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 🔧 Creating SHA-1 worker for resume');
+            /* eslint-enable no-console */
             this.sha1Worker = createWorker();
         }
         this.sha1Worker.addEventListener('message', this.onWorkerMessage);
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ SHA-1 worker ready for resume');
+        /* eslint-enable no-console */
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🔍 Getting session info from server');
+        /* eslint-enable no-console */
         this.getSessionInfo();
     }
 
@@ -509,10 +589,19 @@ class MultiputUpload extends BaseMultiput {
     getSessionInfo = async (): Promise<any> => {
         const uploadUrl = this.getBaseUploadUrl();
         const sessionUrl = `${uploadUrl}/files/upload_sessions/${this.sessionId}`;
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📡 Fetching session info', { sessionUrl });
+        /* eslint-enable no-console */
         try {
             const response = await this.xhr.get({ url: sessionUrl });
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ✅ Session info retrieved');
+            /* eslint-enable no-console */
             this.getSessionSuccessHandler(response.data);
         } catch (error) {
+            /* eslint-disable no-console */
+            console.error('[MultiputUpload] ❌ Failed to get session info', error);
+            /* eslint-enable no-console */
             this.getSessionErrorHandler(error);
         }
     };
@@ -524,7 +613,7 @@ class MultiputUpload extends BaseMultiput {
      * @param response
      * @return {void}
      */
-    getSessionSuccessHandler(data: any): void {
+    getSessionSuccessHandler = async (data: any): Promise<void> => {
         const { part_size, session_endpoints } = data;
 
         // Set session information gotten from API response
@@ -538,10 +627,15 @@ class MultiputUpload extends BaseMultiput {
             logEvent: session_endpoints.log_event,
         };
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Session endpoints configured, checking uploaded parts');
+        /* eslint-enable no-console */
+
         // When resuming, check which parts are already uploaded on the server
         // This handles the case where a part was in the middle of uploading when interrupted
-        this.checkAndMarkUploadedParts();
-    }
+        // IMPORTANT: We must await this to ensure parts are marked before processing
+        await this.checkAndMarkUploadedParts();
+    };
 
     /**
      * Check which parts are already uploaded on the server and mark them accordingly.
@@ -571,35 +665,205 @@ class MultiputUpload extends BaseMultiput {
         // If this is a resume (we have a sessionId), check which parts are already uploaded
         if (this.sessionId && this.sessionEndpoints.listParts) {
             try {
-                // Get all uploaded parts from the server
-                const response = await this.xhr.get({
-                    url: this.sessionEndpoints.listParts,
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 🔍 Checking which parts are already uploaded on server');
+                /* eslint-enable no-console */
+
+                // Fetch all uploaded parts with pagination
+                // Box API listParts supports limit/offset pagination
+                const allUploadedParts = [];
+                const limit = 1000; // Fetch up to 1000 parts at a time
+                
+                // Fetch first page to get structure
+                const firstPageParams = { limit, offset: 0 };
+                const firstPageUrl = updateQueryParameters(this.sessionEndpoints.listParts, firstPageParams);
+                const firstResponse = await this.xhr.get({ url: firstPageUrl });
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 📡 listParts API response structure:', {
+                    hasData: !!firstResponse.data,
+                    dataKeys: firstResponse.data ? Object.keys(firstResponse.data) : [],
+                    fullResponse: JSON.stringify(firstResponse.data, null, 2),
+                });
+                /* eslint-enable no-console */
+
+                const firstPageEntries = firstResponse.data?.entries || [];
+                const totalCount = firstResponse.data?.total_count || 0;
+                allUploadedParts.push(...firstPageEntries);
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 📋 Fetched first page', {
+                    entriesInPage: firstPageEntries.length,
+                    totalFetched: allUploadedParts.length,
+                    totalCount,
+                });
+                /* eslint-enable no-console */
+
+                // Fetch remaining pages if needed
+                if (firstPageEntries.length === limit && allUploadedParts.length < totalCount) {
+                    const remainingPages = Math.ceil((totalCount - allUploadedParts.length) / limit);
+                    const pagePromises = [];
+                    
+                    for (let page = 1; page < remainingPages; page += 1) {
+                        const pageOffset = page * limit;
+                        const pageParams = { limit, offset: pageOffset };
+                        const pageUrl = updateQueryParameters(this.sessionEndpoints.listParts, pageParams);
+                        pagePromises.push(
+                            this.xhr.get({ url: pageUrl }).then(response => {
+                                const entries = response.data?.entries || [];
+                                allUploadedParts.push(...entries);
+                                /* eslint-disable no-console */
+                                console.log('[MultiputUpload] 📋 Fetched parts page', {
+                                    offset: pageOffset,
+                                    entriesInPage: entries.length,
+                                    totalFetched: allUploadedParts.length,
+                                });
+                                /* eslint-enable no-console */
+                                return entries;
+                            }),
+                        );
+                    }
+                    
+                    await Promise.all(pagePromises);
+                }
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] ✅ Fetched all uploaded parts from server', {
+                    totalUploadedParts: allUploadedParts.length,
+                    totalPartsExpected: this.parts.length,
                 });
 
-                const uploadedParts = response.data?.entries || [];
+                // Log sample of uploaded parts to see structure
+                if (allUploadedParts.length > 0) {
+                    console.log('[MultiputUpload] 📋 Sample uploaded part from server:', {
+                        firstPart: allUploadedParts[0],
+                        allPartKeys: Object.keys(allUploadedParts[0] || {}),
+                    });
+                }
+
+                // Log sample of local parts to see structure
+                if (this.parts.length > 0) {
+                    console.log('[MultiputUpload] 📋 Sample local part:', {
+                        firstPart: {
+                            index: this.parts[0].index,
+                            offset: this.parts[0].offset,
+                            partSize: this.parts[0].partSize,
+                            rangeEnd: this.parts[0].rangeEnd,
+                        },
+                    });
+                }
+                /* eslint-enable no-console */
                 
                 // Create a map of uploaded parts by offset for quick lookup
+                // Only include parts that have both offset and part_id (indicating successful upload)
                 const uploadedPartsMap = new Map();
-                uploadedParts.forEach((part: any) => {
+                allUploadedParts.forEach((part: any) => {
                     // Parts are identified by their offset
-                    uploadedPartsMap.set(part.offset, part);
+                    // Only consider parts with part_id as successfully uploaded
+                    if (part.offset === undefined) {
+                        /* eslint-disable no-console */
+                        console.warn('[MultiputUpload] ⚠️ Uploaded part missing offset field:', part);
+                        /* eslint-enable no-console */
+                    } else if (!part.part_id) {
+                        /* eslint-disable no-console */
+                        console.warn('[MultiputUpload] ⚠️ Uploaded part missing part_id (not fully uploaded):', {
+                            offset: part.offset,
+                            part,
+                        });
+                        /* eslint-enable no-console */
+                    } else {
+                        // Only add parts that have both offset and part_id (successfully uploaded)
+                        uploadedPartsMap.set(part.offset, part);
+                    }
                 });
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 🔍 Matching parts by offset', {
+                    uploadedPartsOffsets: Array.from(uploadedPartsMap.keys()).slice(0, 10),
+                    localPartsOffsets: this.parts.slice(0, 10).map(p => p.offset),
+                });
+                /* eslint-enable no-console */
+
+                let partsMarkedAsUploaded = 0;
+                const unmatchedParts = [];
+                const matchedParts = [];
+                
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 🔍 Starting part matching process', {
+                    totalLocalParts: this.parts.length,
+                    totalUploadedPartsFromServer: allUploadedParts.length,
+                    uploadedOffsets: Array.from(uploadedPartsMap.keys()).sort((a, b) => a - b),
+                });
+                /* eslint-enable no-console */
 
                 // Mark parts that are already uploaded on the server
                 this.parts.forEach(part => {
                     const uploadedPart = uploadedPartsMap.get(part.offset);
-                    if (uploadedPart) {
-                        // This part is already uploaded on the server
+                    if (uploadedPart && uploadedPart.part_id) {
+                        // This part is already uploaded on the server (has part_id = successfully uploaded)
                         part.state = PART_STATE_UPLOADED;
-                        part.data = { part: uploadedPart };
+                        // Ensure the part data includes offset and part_id for commit
+                        // The server's uploadedPart should have part_id, and we use the local part's offset
+                        part.data = {
+                            part: {
+                                ...uploadedPart,
+                                offset: part.offset, // Ensure offset is set from local part
+                            },
+                        };
                         part.uploadedBytes = part.partSize;
+                        // Store part_id for commit
+                        if (uploadedPart.part_id) {
+                            part.id = uploadedPart.part_id;
+                        }
                         
                         // Update counters
                         this.numPartsNotStarted -= 1;
                         this.numPartsUploaded += 1;
                         this.totalUploadedBytes += part.partSize;
+                        partsMarkedAsUploaded += 1;
+                        
+                        matchedParts.push({
+                            index: part.index,
+                            offset: part.offset,
+                            partSize: part.partSize,
+                            partId: uploadedPart.part_id,
+                        });
+                    } else {
+                        // Part not found in uploaded list or missing part_id - needs to be uploaded
+                        unmatchedParts.push({
+                            index: part.index,
+                            offset: part.offset,
+                            partSize: part.partSize,
+                            reason: uploadedPart ? 'missing part_id' : 'not in uploaded list',
+                        });
                     }
                 });
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] ✅ Part matching complete', {
+                    partsMarkedAsUploaded,
+                    partsToUpload: unmatchedParts.length,
+                    matchedPartsSample: matchedParts.slice(0, 5),
+                    unmatchedPartsSample: unmatchedParts.slice(0, 5),
+                });
+                
+                if (unmatchedParts.length > 0) {
+                    console.log('[MultiputUpload] ⚠️ Parts not found in uploaded list (will be uploaded):', {
+                        count: unmatchedParts.length,
+                        firstFew: unmatchedParts.slice(0, 10),
+                        lastFew: unmatchedParts.slice(-10),
+                    });
+                }
+                /* eslint-enable no-console */
+
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] ✅ Marked parts as already uploaded', {
+                    partsMarkedAsUploaded,
+                    partsToUpload: this.parts.length - partsMarkedAsUploaded,
+                    totalUploadedBytes: this.totalUploadedBytes,
+                    totalUploadedBytesMB: (this.totalUploadedBytes / 1024 / 1024).toFixed(2),
+                });
+                /* eslint-enable no-console */
 
                 // Update first unuploaded part index
                 this.updateFirstUnuploadedPartIndex();
@@ -615,6 +879,10 @@ class MultiputUpload extends BaseMultiput {
                 // If we can't list parts, continue anyway - parts will be re-uploaded if needed
                 // According to Box API docs, parts are immutable once uploaded, so re-uploading
                 // a complete part will result in an error, but incomplete/interrupted parts can be uploaded
+                /* eslint-disable no-console */
+                console.error('[MultiputUpload] ❌ Could not list uploaded parts', error);
+                console.log('[MultiputUpload] ⚠️ Continuing with upload - will re-upload parts if needed');
+                /* eslint-enable no-console */
                 this.consoleLog('Could not list uploaded parts, continuing with upload');
             }
         }
@@ -735,6 +1003,9 @@ class MultiputUpload extends BaseMultiput {
      */
     abortSession(): void {
         if (this.sha1Worker) {
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 🔚 Terminating SHA-1 worker (session aborted)');
+            /* eslint-enable no-console */
             this.sha1Worker.terminate();
         }
 
@@ -806,6 +1077,20 @@ class MultiputUpload extends BaseMultiput {
         }
 
         this.totalUploadedBytes += newUploadedBytes - prevUploadedBytes;
+        const progressPercent = ((this.totalUploadedBytes / this.file.size) * 100).toFixed(2);
+        
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📊 Progress update', {
+            uploaded: this.totalUploadedBytes,
+            uploadedMB: (this.totalUploadedBytes / 1024 / 1024).toFixed(2),
+            total: this.file.size,
+            totalMB: (this.file.size / 1024 / 1024).toFixed(2),
+            percent: `${progressPercent}%`,
+            partsUploaded: this.numPartsUploaded,
+            totalParts: this.parts.length,
+        });
+        /* eslint-enable no-console */
+
         this.progressCallback({
             loaded: this.totalUploadedBytes,
             total: this.file.size,
@@ -829,9 +1114,26 @@ class MultiputUpload extends BaseMultiput {
             return;
         }
 
+        // Check if all parts are uploaded and file SHA-1 is ready for commit
         if (this.numPartsUploaded === this.parts.length && this.fileSha1) {
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ✅ All parts uploaded and file SHA-1 ready, committing session');
+            /* eslint-enable no-console */
             this.commitSession();
             return;
+        }
+
+        // If all parts are uploaded but file SHA-1 is not ready, we still need to compute digests
+        // for the SHA-1 worker (even though parts are already uploaded)
+        if (this.numPartsUploaded === this.parts.length && !this.fileSha1) {
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ⚠️ All parts uploaded but file SHA-1 not ready, computing digests for file hash', {
+                numPartsUploaded: this.numPartsUploaded,
+                totalParts: this.parts.length,
+                partsNeedingDigest: this.parts.filter(p => !p.sha1).length,
+                shouldCompute: this.shouldComputeDigestForNextPart(),
+            });
+            /* eslint-enable no-console */
         }
 
         this.updateFirstUnuploadedPartIndex();
@@ -840,8 +1142,18 @@ class MultiputUpload extends BaseMultiput {
             this.uploadNextPart();
         }
 
+        // Always check if we need to compute digests (especially for already-uploaded parts when fileSha1 is missing)
         if (this.shouldComputeDigestForNextPart()) {
             this.computeDigestForNextPart();
+        } else if (this.numPartsUploaded === this.parts.length && !this.fileSha1) {
+            /* eslint-disable no-console */
+            console.warn('[MultiputUpload] ⚠️ All parts uploaded but file SHA-1 not ready and shouldComputeDigestForNextPart returned false', {
+                numPartsDigestComputing: this.numPartsDigestComputing,
+                numPartsDigestReady: this.numPartsDigestReady,
+                digestReadahead: this.config.digestReadahead,
+                partsWithoutSha1: this.parts.filter(p => !p.sha1).map(p => ({ index: p.index, offset: p.offset, state: p.state })),
+            });
+            /* eslint-enable no-console */
         }
     };
 
@@ -853,10 +1165,20 @@ class MultiputUpload extends BaseMultiput {
      * @return {boolean} true if there is work to do, false otherwise.
      */
     shouldComputeDigestForNextPart(): boolean {
+        // If file SHA-1 is not ready, we need to compute digests even for already-uploaded parts
+        const needsFileSha1 = !this.fileSha1;
+        const hasPartsNeedingDigest = this.parts.some(part => {
+            const alreadySentToWorker = part.timing?.fileDigestTime !== undefined;
+            const alreadyComputedAndSent = part.sha1 !== undefined && part.state === PART_STATE_UPLOADED;
+            const needsDigestForUpload = !part.sha1 && part.state === PART_STATE_NOT_STARTED;
+            const needsDigestForFileHash = needsFileSha1 && part.state === PART_STATE_UPLOADED && !alreadySentToWorker && !alreadyComputedAndSent;
+            return needsDigestForUpload || needsDigestForFileHash;
+        });
+        
         return (
             !this.isDestroyed() &&
             this.numPartsDigestComputing === 0 &&
-            this.numPartsNotStarted > 0 &&
+            hasPartsNeedingDigest &&
             this.numPartsDigestReady < this.config.digestReadahead
         );
     }
@@ -868,12 +1190,48 @@ class MultiputUpload extends BaseMultiput {
      * @return {void}
      */
     computeDigestForNextPart(): void {
-        for (let i = this.firstUnuploadedPartIndex; i < this.parts.length; i += 1) {
+        // If file SHA-1 is not ready, we need to compute digests for all parts (including already-uploaded ones)
+        const needsFileSha1 = !this.fileSha1;
+        
+        // Find the first part that needs digest computation
+        // For already-uploaded parts, check if they've been sent to the worker (fileDigestTime exists)
+        // Start from firstUnuploadedPartIndex for parts that need uploading, or from 0 if we need file SHA-1
+        const startIndex = needsFileSha1 ? 0 : this.firstUnuploadedPartIndex;
+        
+        for (let i = startIndex; i < this.parts.length; i += 1) {
             const part = this.parts[i];
-            if (part.state === PART_STATE_NOT_STARTED) {
+            
+            // Check if part has already been sent to SHA-1 worker (for file hash computation)
+            // We check both fileDigestTime (worker responded) and sha1 (we computed and sent it)
+            const alreadySentToWorker = part.timing?.fileDigestTime !== undefined;
+            const alreadyComputedAndSent = part.sha1 !== undefined && part.state === PART_STATE_UPLOADED;
+            
+            // Compute digest if:
+            // 1. Part is not started and doesn't have SHA-1 yet (normal case - needs to be uploaded)
+            // 2. Part is uploaded but file SHA-1 is not ready AND hasn't been sent to worker yet
+            //    (resume case where all parts are uploaded but file hash not computed)
+            //    Note: If part has sha1 and is UPLOADED, we've already computed and sent it
+            const needsDigestForUpload = !part.sha1 && part.state === PART_STATE_NOT_STARTED;
+            const needsDigestForFileHash = needsFileSha1 && part.state === PART_STATE_UPLOADED && !alreadySentToWorker && !alreadyComputedAndSent;
+            
+            if (needsDigestForUpload || needsDigestForFileHash) {
+                /* eslint-disable no-console */
+                console.log('[MultiputUpload] 🔐 Computing digest for part', {
+                    partIndex: part.index,
+                    partOffset: part.offset,
+                    reason: needsDigestForUpload ? 'needs upload' : 'needs file hash',
+                    alreadySentToWorker,
+                    alreadyComputedAndSent,
+                    hasSha1: !!part.sha1,
+                    state: part.state,
+                });
+                /* eslint-enable no-console */
+                
                 // Update the counters here instead of computeDigestForPart because computeDigestForPart
                 // can get called on retries
-                this.numPartsNotStarted -= 1;
+                if (part.state === PART_STATE_NOT_STARTED) {
+                    this.numPartsNotStarted -= 1;
+                }
                 this.numPartsDigestComputing += 1;
                 this.computeDigestForPart(part);
                 return;
@@ -889,6 +1247,13 @@ class MultiputUpload extends BaseMultiput {
      * @return {Promise}
      */
     async computeDigestForPart(part: MultiputPart): Promise<any> {
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🔐 Computing SHA-1 digest for part', part.index, {
+            offset: part.offset,
+            size: part.partSize,
+            sizeMB: (part.partSize / 1024 / 1024).toFixed(2),
+        });
+
         const blob = this.file.slice(part.offset, part.offset + this.partSize);
         const reader = new window.FileReader();
         const startTimestamp = Date.now();
@@ -908,13 +1273,39 @@ class MultiputUpload extends BaseMultiput {
             this.sendPartToWorker(part, buffer);
 
             part.sha1 = sha1;
-            part.state = PART_STATE_DIGEST_READY;
-            part.blob = blob;
-
-            this.numPartsDigestReady += 1;
+            
+            // Check if this part was already uploaded (for file SHA-1 computation only)
+            const wasAlreadyUploaded = part.state === PART_STATE_UPLOADED;
+            const digestCompleteTimestamp = Date.now();
+            
+            if (!wasAlreadyUploaded) {
+                // Part needs to be uploaded - set state to DIGEST_READY
+                part.state = PART_STATE_DIGEST_READY;
+                part.blob = blob;
+                this.numPartsDigestReady += 1;
+                
+                /* eslint-disable no-console */
+                console.log(`[MultiputUpload] ✅ Part ${part.index} digest ready`, {
+                    readTime: readCompleteTimestamp - startTimestamp,
+                    digestTime: digestCompleteTimestamp - readCompleteTimestamp,
+                    totalTime: digestCompleteTimestamp - startTimestamp,
+                });
+                /* eslint-enable no-console */
+            } else {
+                // Part is already uploaded - keep it as UPLOADED and don't set blob
+                // We only computed the SHA-1 for the file hash computation
+                // Don't increment numPartsDigestReady to prevent re-upload
+                /* eslint-disable no-console */
+                console.log(`[MultiputUpload] ✅ Part ${part.index} digest computed (already uploaded, not re-uploading)`, {
+                    readTime: readCompleteTimestamp - startTimestamp,
+                    digestTime: digestCompleteTimestamp - readCompleteTimestamp,
+                    totalTime: digestCompleteTimestamp - startTimestamp,
+                });
+                /* eslint-enable no-console */
+            }
+            
             // This will trigger the next digest computation
             this.numPartsDigestComputing -= 1;
-            const digestCompleteTimestamp = Date.now();
 
             part.timing = {
                 partDigestTime: digestCompleteTimestamp - startTimestamp,
@@ -941,15 +1332,56 @@ class MultiputUpload extends BaseMultiput {
         }
 
         const { data } = event;
+        
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📨 SHA-1 worker message received', {
+            type: data.type,
+            partIndex: data.part?.index,
+            partOffset: data.part?.offset,
+            duration: data.duration,
+        });
+        /* eslint-enable no-console */
+        
         if (data.type === 'partDone') {
             const { part } = data;
             this.parts[part.index].timing.fileDigestTime = data.duration;
+            
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ✅ SHA-1 worker processed part', {
+                partIndex: part.index,
+                partOffset: part.offset,
+                partSize: part.size,
+                duration: data.duration,
+                partsProcessed: this.parts.filter(p => p.timing?.fileDigestTime).length,
+                totalParts: this.parts.length,
+            });
+            /* eslint-enable no-console */
+            
             this.processNextParts();
         } else if (data.type === 'done') {
             this.fileSha1 = hexToBase64(data.sha1);
+            
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 🎉 SHA-1 worker completed file hash computation', {
+                fileSha1: `${this.fileSha1.substring(0, 20)}...`,
+                fileSha1Length: this.fileSha1.length,
+                totalPartsProcessed: this.parts.length,
+                fileSize: this.file.size,
+                fileSizeMB: (this.file.size / 1024 / 1024).toFixed(2),
+            });
+            console.log('[MultiputUpload] 🔚 Terminating SHA-1 worker');
+            /* eslint-enable no-console */
+            
             this.sha1Worker.terminate();
             this.processNextParts();
         } else if (data.type === 'error') {
+            /* eslint-disable no-console */
+            console.error('[MultiputUpload] ❌ SHA-1 worker error', {
+                errorName: data.name,
+                errorMessage: data.message,
+                part: data.part,
+            });
+            /* eslint-enable no-console */
             this.sessionErrorHandler(null, LOG_EVENT_TYPE_WEB_WORKER_ERROR, JSON.stringify(data));
         }
     };
@@ -973,6 +1405,19 @@ class MultiputUpload extends BaseMultiput {
             offset: part.offset,
             size: part.partSize,
         };
+        
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📤 Sending part to SHA-1 worker', {
+            partIndex: part.index,
+            partOffset: part.offset,
+            partSize: part.partSize,
+            partSizeMB: (part.partSize / 1024 / 1024).toFixed(2),
+            bufferSize: buffer.byteLength,
+            fileSize: this.file.size,
+            expectedOffset: part.offset, // Worker expects parts in order
+        });
+        /* eslint-enable no-console */
+        
         this.sha1Worker.postMessage(
             {
                 part: partInformation,
@@ -981,7 +1426,13 @@ class MultiputUpload extends BaseMultiput {
             },
             [buffer], // This transfers the ArrayBuffer to the worker context without copying contents.
         );
-        this.consoleLog(`Part sent to worker: ${JSON.stringify(part)}.}`);
+        
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Part sent to SHA-1 worker', {
+            partIndex: part.index,
+            partOffset: part.offset,
+        });
+        /* eslint-enable no-console */
     };
 
     /**
@@ -1037,6 +1488,27 @@ class MultiputUpload extends BaseMultiput {
             return;
         }
 
+        if (!this.fileSha1) {
+            /* eslint-disable no-console */
+            console.error('[MultiputUpload] ❌ Cannot commit: file SHA-1 is not ready', {
+                fileSha1: this.fileSha1,
+                numPartsUploaded: this.numPartsUploaded,
+                totalParts: this.parts.length,
+                partsWithoutSha1: this.parts.filter(p => !p.sha1).length,
+            });
+            /* eslint-enable no-console */
+            // Don't commit without file SHA-1 - it's required for the Digest header
+            // The digest computation should be triggered by processNextParts
+            return;
+        }
+
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 🚀 Step 5: All parts uploaded, committing session', {
+            fileSha1: `${this.fileSha1.substring(0, 20)}...`,
+            totalParts: this.parts.length,
+        });
+        /* eslint-enable no-console */
+
         const stats = {
             totalPartReadTime: 0,
             totalPartDigestTime: 0,
@@ -1044,18 +1516,37 @@ class MultiputUpload extends BaseMultiput {
             totalPartUploadTime: 0,
         };
 
+        const partsData = this.parts.map(part => {
+            stats.totalPartReadTime += part.timing.readTime;
+            stats.totalPartDigestTime += part.timing.subtleCryptoTime;
+            stats.totalFileDigestTime += part.timing.fileDigestTime;
+            stats.totalPartUploadTime += part.timing.uploadTime;
+            return part.getPart();
+        });
+
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📦 Parts data for commit', {
+            totalParts: partsData.length,
+            samplePart: partsData[0],
+            partsWithOffset: partsData.filter(p => p.offset !== undefined).length,
+            partsWithPartId: partsData.filter(p => p.part_id !== undefined).length,
+            fileSha1: this.fileSha1 ? `${this.fileSha1.substring(0, 20)}...` : 'NULL',
+        });
+        /* eslint-enable no-console */
+
         const data = {
-            parts: this.parts
-                .map(part => {
-                    stats.totalPartReadTime += part.timing.readTime;
-                    stats.totalPartDigestTime += part.timing.subtleCryptoTime;
-                    stats.totalFileDigestTime += part.timing.fileDigestTime;
-                    stats.totalPartUploadTime += part.timing.uploadTime;
-                    return part.getPart();
-                })
-                .sort((part1, part2) => part1.offset - part2.offset),
+            parts: partsData.sort((part1, part2) => part1.offset - part2.offset),
             attributes: {},
         };
+
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📊 Upload statistics', {
+            totalParts: this.parts.length,
+            avgReadTime: Math.round(stats.totalPartReadTime / this.parts.length),
+            avgDigestTime: Math.round(stats.totalPartDigestTime / this.parts.length),
+            avgUploadTime: Math.round(stats.totalPartUploadTime / this.parts.length),
+        });
+        /* eslint-enable no-console */
 
         const fileLastModified = getFileLastModifiedAsISONoMSIfPossible(this.file);
         if (fileLastModified) {
@@ -1100,6 +1591,9 @@ class MultiputUpload extends BaseMultiput {
         const { status, data } = response;
 
         if (status === 202) {
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] ⏳ Commit session returned 202 (processing), will retry');
+            /* eslint-enable no-console */
             this.commitSessionRetry(response);
             return;
         }
@@ -1111,9 +1605,20 @@ class MultiputUpload extends BaseMultiput {
             entries = [data];
         }
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Upload complete! Session committed successfully', {
+            fileId: entries?.[0]?.id,
+            fileName: entries?.[0]?.name,
+            totalParts: this.parts.length,
+        });
+        /* eslint-enable no-console */
+
         // Remove persisted session on successful completion
         if (this.sessionId) {
             removePersistedSession(this.sessionId);
+            /* eslint-disable no-console */
+            console.log('[MultiputUpload] 🗑️ Removed persisted session from localStorage');
+            /* eslint-enable no-console */
         }
 
         this.destroy();
@@ -1137,6 +1642,25 @@ class MultiputUpload extends BaseMultiput {
         }
 
         const { response } = error;
+
+        /* eslint-disable no-console */
+        console.error('[MultiputUpload] ❌ Commit session error', {
+            status: response?.status,
+            statusText: response?.statusText,
+            error,
+            sessionId: this.sessionId,
+            commitUrl: this.sessionEndpoints?.commit,
+            fileSha1: this.fileSha1 ? `${this.fileSha1.substring(0, 20)}...` : 'NULL',
+            totalParts: this.parts.length,
+            partsData: this.parts.map(p => ({
+                index: p.index,
+                offset: p.offset,
+                hasPartData: !!p.data?.part,
+                partId: p.id,
+                getPartResult: p.getPart(),
+            })),
+        });
+        /* eslint-enable no-console */
 
         if (!response) {
             // Some random error happened
@@ -1257,6 +1781,10 @@ class MultiputUpload extends BaseMultiput {
     populateParts(): void {
         this.numPartsNotStarted = Math.ceil(this.file.size / this.partSize);
 
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] 📦 Creating', this.numPartsNotStarted, 'part metadata objects');
+        /* eslint-enable no-console */
+
         for (let i = 0; i < this.numPartsNotStarted; i += 1) {
             const offset = i * this.partSize;
             const currentPartSize = Math.min(offset + this.partSize, this.file.size) - offset;
@@ -1276,6 +1804,13 @@ class MultiputUpload extends BaseMultiput {
             );
             this.parts.push(part);
         }
+
+        /* eslint-disable no-console */
+        console.log('[MultiputUpload] ✅ Parts array populated:', {
+            totalParts: this.parts.length,
+            partsNotStarted: this.numPartsNotStarted,
+        });
+        /* eslint-enable no-console */
     }
 
     /**
